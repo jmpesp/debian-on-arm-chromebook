@@ -1,0 +1,219 @@
+diff --git arch/arm/boot/dts/exynos5250-cros-common.dtsi arch/arm/boot/dts/exynos5250-cros-common.dtsi
+index 2c1560d..d4cda0a 100644
+--- arch/arm/boot/dts/exynos5250-cros-common.dtsi
++++ arch/arm/boot/dts/exynos5250-cros-common.dtsi
+@@ -34,6 +34,25 @@
+ 			samsung,pin-pud = <0>;
+ 			samsung,pin-drv = <0>;
+ 		};
++		sd_wp: sd-wp {
++			samsung,pins = "gpc2-1";
++			samsung,pin-function = <0>;
++			samsung,pin-pud = <0>;
++			samsung,pin-drv = <0>;
++		};
++		wifi_en: wifi-en {
++			samsung,pins = "gpx0-1";
++			samsung,pin-function = <1>;
++			samsung,pin-pud = <0>;
++			samsung,pin-drv = <0>;
++		};
++
++		wifi_rst: wifi-rst {
++			samsung,pins = "gpx0-2";
++			samsung,pin-function = <1>;
++			samsung,pin-pud = <0>;
++			samsung,pin-drv = <0>;
++		};
+ 	};
+ 
+ 	i2c@12C60000 {
+@@ -182,6 +201,21 @@
+ 					regulator-max-microvolt = <2850000>;
+ 					regulator-always-on;
+ 				};
++
++				en32khz_ap: EN32KHZ_AP {
++					regulator-name = "en32khz_ap";
++					regulator-always-on;
++				};
++
++				en32khz_cp: EN32KHZ_CP {
++					regulator-name = "en32khz_cp";
++					regulator-always-on;
++				};
++
++				p32khz: P32KHZ {
++					regulator-name = "p32khz";
++					regulator-always-on;
++				};
+ 			};
+ 		};
+ 	};
+@@ -271,7 +305,7 @@
+ 		samsung,dw-mshc-sdr-timing = <2 3>;
+ 		samsung,dw-mshc-ddr-timing = <1 2>;
+ 		pinctrl-names = "default";
+-		pinctrl-0 = <&sd2_clk &sd2_cmd &sd2_cd &sd2_bus4>;
++		pinctrl-0 = <&sd2_clk &sd2_cmd &sd2_cd &sd2_bus4 &sd_wp>;
+ 
+ 		slot@0 {
+ 			reg = <0>;
+@@ -284,6 +318,7 @@
+ 		num-slots = <1>;
+ 		supports-highspeed;
+ 		broken-cd;
++		keep-power-in-suspend;
+ 		card-detect-delay = <200>;
+ 		samsung,dw-mshc-ciu-div = <3>;
+ 		samsung,dw-mshc-sdr-timing = <2 3>;
+@@ -306,6 +341,36 @@
+ 		hpd-gpio = <&gpx3 7 0>;
+ 	};
+ 
++	/* Chain regulators to ensure proper Wifi turn on sequence */
++	wifi_rst_regulator: wifi-rst-regulator {
++		compatible = "regulator-fixed";
++		regulator-name = "wifi-rst-l";
++		gpio = <&gpx0 2 0>;
++		enable-active-high;
++		startup-delay-us = <1500>;
++		pinctrl-names = "default";
++		pinctrl-0 = <&wifi_rst>;
++
++		/*
++		 * Technically we should have a vin-supply of the 32k clock.
++		 * ...but that causes a deferred probe of this regulator
++		 * despite the fact that we don't need to enable it until
++		 * much later.  Skip the dependency since we know that the
++		 * 32k clock will always be kept on from early boot.
++		 *
++		 * vin-supply = <&en32khz_cp>;
++		 */
++	};
++	wifi_en_regulator: wifi-en-regulator {
++		compatible = "regulator-fixed";
++		regulator-name = "wifi-en";
++		gpio = <&gpx0 1 0>;
++		enable-active-high;
++		pinctrl-names = "default";
++		pinctrl-0 = <&wifi_en>;
++		vin-supply = <&wifi_rst_regulator>;
++	};
++
+ 	gpio-keys {
+ 		compatible = "gpio-keys";
+ 
+diff --git arch/arm/boot/dts/exynos5250-snow.dts arch/arm/boot/dts/exynos5250-snow.dts
+index 1ce1088..87e37f4 100644
+--- arch/arm/boot/dts/exynos5250-snow.dts
++++ arch/arm/boot/dts/exynos5250-snow.dts
+@@ -52,6 +52,10 @@
+ 		};
+ 	};
+ 
++	dwmmc2@12220000 {
++		disable-mmc;
++	};
++
+ 	i2c-arbitrator {
+ 		compatible = "i2c-arb-gpio-challenge";
+ 		#address-cells = <1>;
+@@ -190,10 +194,15 @@
+ 	 */
+ 	mmc@12230000 {
+ 		status = "okay";
+-		slot@0 {
+-			pinctrl-names = "default";
+-			pinctrl-0 = <&sd3_clk &sd3_cmd &sd3_bus4>;
+-		};
++		/*
++		 * The current best way to ensure that reset/enable and clocks
++		 * are available before we try to probe the WiFi card is through
++		 * a chain of regulators.
++		 */
++		vmmc-supply = <&wifi_en_regulator>;
++
++		pinctrl-names = "default";
++		pinctrl-0 = <&sd3_clk &sd3_cmd &sd3_bus4>;
+ 	};
+ 
+ 	usb@12110000 {
+diff --git drivers/regulator/max77686.c drivers/regulator/max77686.c
+index ef1af2d..9cec32c 100644
+--- drivers/regulator/max77686.c
++++ drivers/regulator/max77686.c
+@@ -57,6 +57,11 @@
+ #define MAX77686_REGULATORS	MAX77686_REG_MAX
+ #define MAX77686_LDOS		26
+ 
++#define MAX77686_CLOCK_OPMODE_MASK	0x1
++#define MAX77686_CLOCK_EN32KHZ_AP_SHIFT	0x0
++#define MAX77686_CLOCK_EN32KHZ_CP_SHIFT	0x1
++#define MAX77686_CLOCK_P32KHZ_SHIFT	0x2
++
+ enum max77686_ramp_rate {
+ 	RAMP_RATE_13P75MV,
+ 	RAMP_RATE_27P5MV,
+@@ -239,6 +244,12 @@ static struct regulator_ops max77686_buck_dvs_ops = {
+ 	.set_suspend_disable	= max77686_buck_set_suspend_disable,
+ };
+ 
++static struct regulator_ops max77686_fixedvolt_ops = {
++	.is_enabled		= regulator_is_enabled_regmap,
++	.enable			= max77686_enable,
++	.disable		= regulator_disable_regmap,
++};
++
+ #define regulator_desc_ldo(num)		{				\
+ 	.name		= "LDO"#num,					\
+ 	.id		= MAX77686_LDO##num,				\
+@@ -386,6 +397,34 @@ static struct regulator_desc regulators[] = {
+ 	regulator_desc_buck(7),
+ 	regulator_desc_buck(8),
+ 	regulator_desc_buck(9),
++	{
++		.name = "EN32KHZ_AP",
++		.id = MAX77686_EN32KHZ_AP,
++		.ops = &max77686_fixedvolt_ops,
++		.type = REGULATOR_VOLTAGE,
++		.owner = THIS_MODULE,
++		.enable_reg = MAX77686_REG_32KHZ,
++		.enable_mask = MAX77686_CLOCK_OPMODE_MASK	\
++			       << MAX77686_CLOCK_EN32KHZ_AP_SHIFT,
++	}, {
++		.name = "EN32KHZ_CP",
++		.id = MAX77686_EN32KHZ_CP,
++		.ops = &max77686_fixedvolt_ops,
++		.type = REGULATOR_VOLTAGE,
++		.owner = THIS_MODULE,
++		.enable_reg = MAX77686_REG_32KHZ,
++		.enable_mask = MAX77686_CLOCK_OPMODE_MASK	\
++			       << MAX77686_CLOCK_EN32KHZ_CP_SHIFT,
++	}, {
++		.name = "P32KHZ",
++		.id = MAX77686_P32KHZ,
++		.ops = &max77686_fixedvolt_ops,
++		.type = REGULATOR_VOLTAGE,
++		.owner = THIS_MODULE,
++		.enable_reg = MAX77686_REG_32KHZ,
++		.enable_mask = MAX77686_CLOCK_OPMODE_MASK	\
++			       << MAX77686_CLOCK_P32KHZ_SHIFT,
++	},
+ };
+ 
+ #ifdef CONFIG_OF
+diff --git include/linux/mfd/max77686.h include/linux/mfd/max77686.h
+index 46c0f32..d571056 100644
+--- include/linux/mfd/max77686.h
++++ include/linux/mfd/max77686.h
+@@ -67,6 +67,9 @@ enum max77686_regulators {
+ 	MAX77686_BUCK7,
+ 	MAX77686_BUCK8,
+ 	MAX77686_BUCK9,
++	MAX77686_EN32KHZ_AP,
++	MAX77686_EN32KHZ_CP,
++	MAX77686_P32KHZ,
+ 
+ 	MAX77686_REG_MAX,
+ };
