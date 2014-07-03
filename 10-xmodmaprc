@@ -1,0 +1,6 @@
+! pressing keycode N does action M
+! Mods: nothing, shift, Mode_Switch, Mode_Switch + Shift
+keycode 111 = Up NoSymbol Prior
+keycode 116 = Down NoSymbol Next
+
+keysym Super_L = Mode_switch
