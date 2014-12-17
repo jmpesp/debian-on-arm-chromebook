@@ -51,7 +51,7 @@ chroot ${MNT} apt-get install wpasupplicant iw upower cryptsetup
 echo "yourhostname" > ${MNT}/etc/hostname
 
 # Set the root password
-passwd
+chroot ${MNT} passwd
 
 # Copy over built-in wireless firmware
 mkdir ${MNT}/lib/firmware/mrvl/
