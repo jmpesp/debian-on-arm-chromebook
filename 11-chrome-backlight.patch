@@ -1,0 +1,38 @@
+diff --git arch/arm/boot/dts/exynos5250-pinctrl.dtsi arch/arm/boot/dts/exynos5250-pinctrl.dtsi
+index 9a49e68..b0b46cd 100644
+--- arch/arm/boot/dts/exynos5250-pinctrl.dtsi
++++ arch/arm/boot/dts/exynos5250-pinctrl.dtsi
+@@ -351,6 +351,13 @@
+                        samsung,pin-drv = <0>;
+                };
+ 
++        pwm0_out: pwm0-out {
++            samsung,pins = "gpb2-0";
++            samsung,pin-function = <2>;
++            samsung,pin-pud = <0>;
++            samsung,pin-drv = <0>;
++        };
++
+                i2c7_bus: i2c7-bus {
+                        samsung,pins = "gpb2-2", "gpb2-3";
+                        samsung,pin-function = <3>;
+diff --git arch/arm/boot/dts/exynos5250-snow.dts arch/arm/boot/dts/exynos5250-snow.dts
+index 87e37f4..d9a550e 100644
+--- arch/arm/boot/dts/exynos5250-snow.dts
++++ arch/arm/boot/dts/exynos5250-snow.dts
+@@ -215,4 +215,13 @@
+                        clock-frequency = <24000000>;
+                };
+        };
++
++    backlight {
++        compatible = "pwm-backlight";
++        pwms = <&pwm 0 1000000 0>;
++        brightness-levels = <0 100 500 1000 1500 2000 2500 2800>;
++        default-brightness-level = <7>;
++        pinctrl-0 = <&pwm0_out>;
++        pinctrl-names = "default";
++    };
+ };
+
+
